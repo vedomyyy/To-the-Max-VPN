@@ -8,9 +8,9 @@
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 <p align="center">
-  <img src="screenshots/screenshot2.png" width="230" alt="TUN mode"/>
-  <img src="screenshots/screenshot3.png" width="230" alt="Proxy mode"/>
-  <img src="screenshots/screenshot4.png" width="230" alt="Settings"/>
+  <img src="screenshots/screenshot1.png" width="230" alt="TUN mode"/>
+  <img src="screenshots/screenshot2.png" width="230" alt="Proxy mode"/>
+  <img src="screenshots/screenshot3.png" width="230" alt="Settings"/>
 </p>
 
 ---
