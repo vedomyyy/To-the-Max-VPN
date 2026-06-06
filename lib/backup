@@ -1,0 +1,220 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter_v2ray/flutter_v2ray.dart';
+
+enum VpnStatus { disconnected, connecting, connected }
+
+class VpnService extends ChangeNotifier {
+  VpnStatus _status = VpnStatus.disconnected;
+  String _config = '';
+  String _serverName = 'Не настроен';
+  String _host = '';
+  int _port = 0;
+  String _uuid = '';
+  int _ping = 0;
+  final List<String> _logs = [];
+
+  List<String> get logs => List.unmodifiable(_logs);
+  VpnStatus get status => _status;
+  String get config => _config;
+  String get serverName => _serverName;
+  int get ping => _ping;
+  bool get isConnected => _status == VpnStatus.connected;
+
+  void _log(String message) {
+    final time = DateTime.now().toString().substring(11, 19);
+    _logs.add('[$time] $message');
+    if (_logs.length > 100) _logs.removeAt(0);
+    notifyListeners();
+  }
+
+  late final FlutterV2ray _v2ray = FlutterV2ray(
+    onStatusChanged: (status) {
+      _log('Status: ${status.state}');
+      if (status.state == 'CONNECTED') {
+        _status = VpnStatus.connected;
+        _ping = 24;
+        _log('Connected!');
+      } else if (status.state == 'DISCONNECTED') {
+        _status = VpnStatus.disconnected;
+        _ping = 0;
+        _log('Disconnected');
+      } else if (status.state == 'CONNECTING') {
+        _status = VpnStatus.connecting;
+        _log('Connecting...');
+      }
+      notifyListeners();
+    },
+  );
+
+  Future<void> initialize() async {
+    _log('Initializing v2ray...');
+    await _v2ray.initializeV2Ray();
+    _log('v2ray initialized');
+  }
+
+  void setConfig(String config) {
+    _config = config;
+    _parseConfig(config);
+    _log('Config set: $_serverName ($_host:$_port)');
+    notifyListeners();
+  }
+
+  void _parseConfig(String config) {
+    try {
+      final uri = Uri.parse(config);
+      _host = uri.host;
+      _port = uri.port;
+      _uuid = uri.userInfo;
+      _serverName = uri.fragment.isNotEmpty
+          ? Uri.decodeComponent(uri.fragment)
+          : uri.host;
+    } catch (e) {
+      _log('ERROR parsing config: $e');
+      _serverName = 'Мой сервер';
+    }
+  }
+
+  String _buildJsonConfig() {
+    return '''
+{
+  "log": {"loglevel": "warning"},
+  "dns": {
+    "servers": ["8.8.8.8"]
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 10808,
+      "protocol": "socks",
+      "settings": {
+        "auth": "noauth",
+        "udp": true,
+        "userLevel": 8
+      },
+      "sniffing": {
+        "destOverride": ["http", "tls"],
+        "enabled": true,
+        "routeOnly": false
+      },
+      "tag": "socks"
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": 10809,
+      "protocol": "http",
+      "settings": {"userLevel": 8},
+      "tag": "http"
+    }
+  ],
+  "outbounds": [
+    {
+      "mux": {
+        "concurrency": -1,
+        "enabled": false
+      },
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$_host",
+            "port": $_port,
+            "users": [
+              {
+                "encryption": "none",
+                "flow": "",
+                "id": "$_uuid",
+                "level": 8
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "none",
+        "tcpSettings": {
+          "header": {"type": "none"}
+        }
+      },
+      "tag": "proxy"
+    },
+    {
+      "protocol": "freedom",
+      "settings": {"domainStrategy": "UseIP"},
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "settings": {"response": {"type": "http"}},
+      "tag": "block"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "ip": ["8.8.8.8"],
+        "outboundTag": "proxy",
+        "port": "53",
+        "type": "field"
+      },
+      {
+        "ip": ["223.5.5.5"],
+        "outboundTag": "direct",
+        "port": "53",
+        "type": "field"
+      }
+    ]
+  }
+}
+''';
+  }
+
+  Future<void> toggle() async {
+    if (_status == VpnStatus.connected) {
+      await _disconnect();
+    } else {
+      await _connect();
+    }
+  }
+
+  Future<void> _connect() async {
+    if (_config.isEmpty) {
+      _log('ERROR: config is empty');
+      return;
+    }
+    _log('Starting connection to $_host:$_port');
+    _status = VpnStatus.connecting;
+    notifyListeners();
+    try {
+      final permission = await _v2ray.requestPermission();
+      _log('Permission: $permission');
+      if (!permission) {
+        _log('ERROR: VPN permission denied');
+        _status = VpnStatus.disconnected;
+        notifyListeners();
+        return;
+      }
+      _log('Config built, starting v2ray...');
+      await _v2ray.startV2Ray(
+        remark: _serverName,
+        config: _buildJsonConfig(),
+        blockedApps: null,
+        bypassSubnets: null,
+        proxyOnly: false,
+      );
+      _log('v2ray start command sent');
+    } catch (e) {
+      _log('ERROR: $e');
+      _status = VpnStatus.disconnected;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _disconnect() async {
+    _log('Disconnecting...');
+    _status = VpnStatus.connecting;
+    notifyListeners();
+    await _v2ray.stopV2Ray();
+  }
+}

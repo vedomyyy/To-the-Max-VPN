@@ -1,0 +1,35 @@
+name: vpn_client
+description: "Flutter VPN client (Android + Windows)"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  shared_preferences: ^2.3.0
+  flutter_v2ray: ^1.0.10
+  path_provider: ^2.1.3
+  windows_single_instance: ^0.1.7
+
+  # Трей и управление окном (Windows)
+  tray_manager: ^0.2.3
+  window_manager: ^0.4.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/xray/
+    - assets/tray/
+    - assets/tun2socks/tun2socks.exe
+    - assets/tun2socks/wintun.dll
