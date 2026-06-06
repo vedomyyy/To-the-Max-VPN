@@ -150,4 +150,4 @@ flutter run -d windows
 
 ## License
 
-MIT
+GPL-3.0
