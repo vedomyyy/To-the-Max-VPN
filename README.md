@@ -6,7 +6,7 @@
 ![Flutter](https://img.shields.io/badge/Flutter-3.x-54C5F8?style=flat-square&logo=flutter)
 ![Protocol](https://img.shields.io/badge/protocol-VLESS%20+%20Reality-orange?style=flat-square)
 ![Xray](https://img.shields.io/badge/xray--core-v26.6.1-blueviolet?style=flat-square)
-![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 <p align="center">
   <img src="screenshots/screenshot1.png" width="230" alt="TUN mode"/>
@@ -175,4 +175,4 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 
 ## License
 
-MIT
+GPL-3.0
