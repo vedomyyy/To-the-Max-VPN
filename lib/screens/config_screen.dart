@@ -35,13 +35,53 @@ class _ConfigScreenState extends State<ConfigScreen> {
   void _save() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+
+    // Определяем тип защиты для сообщения пользователю
+    String securityLabel = '';
+    String? warningMessage;
+    try {
+      final uri = Uri.parse(text);
+      final q = uri.queryParameters;
+      final security = q['security'] ?? 'none';
+      final scheme = uri.scheme.toUpperCase();
+      securityLabel = switch (security) {
+        'reality' => '$scheme + Reality',
+        'tls'     => '$scheme + TLS',
+        'none'    => '$scheme (без шифрования)',
+        _         => '$scheme ($security)',
+      };
+      // Предупреждаем если Reality URL неполный
+      if (security == 'reality') {
+        final missing = <String>[];
+        if ((q['pbk'] ?? '').isEmpty) missing.add('pbk');
+        if ((q['sid'] ?? '').isEmpty) missing.add('sid');
+        if ((q['sni'] ?? '').isEmpty) missing.add('sni');
+        if (missing.isNotEmpty) {
+          warningMessage = '⚠ Reality: отсутствуют параметры: ${missing.join(', ')}';
+        }
+      }
+    } catch (_) {}
+
     widget.vpnService.setConfig(text);
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Конфиг сохранён'),
-        backgroundColor: Color(0xFF1A1A2E),
-      ),
-    );
+
+    if (warningMessage != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(warningMessage!),
+          backgroundColor: Colors.orange.shade900,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            securityLabel.isEmpty ? 'Конфиг сохранён' : 'Сохранено: $securityLabel',
+          ),
+          backgroundColor: const Color(0xFF1A1A2E),
+        ),
+      );
+    }
     Navigator.pop(context);
   }
 

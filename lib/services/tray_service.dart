@@ -34,6 +34,19 @@ class TrayService with TrayListener {
   void _onVpnChanged() {
     _setIcon(_vpn.status);
     _rebuildMenu();
+
+    // Windows иногда теряет иконку трея при удалении сетевого адаптера
+    // (TUN disconnect убирает WinTUN → Windows перерисовывает notification area).
+    // Перевыставляем иконку через небольшую задержку.
+    if (_vpn.status == VpnStatus.disconnected ||
+        _vpn.status == VpnStatus.error) {
+      Future.delayed(const Duration(milliseconds: 600), () {
+        _setIcon(_vpn.status);
+      });
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        _setIcon(_vpn.status);
+      });
+    }
   }
 
   Future<void> _setIcon(VpnStatus status) async {

@@ -99,6 +99,12 @@ class WindowsVpnBackend implements VpnBackend {
     _configUrl = clean;
     _parsed = parsed;
     _emit('Parsed: host=${parsed.host} port=${parsed.port} uuid=${parsed.uuid}');
+    _emit('Security: ${parsed.security}, type: ${parsed.type}, flow: ${parsed.flow.isEmpty ? "(none)" : parsed.flow}');
+    _emit('SNI: ${parsed.sni.isEmpty ? "(none)" : parsed.sni}, fp: ${parsed.fp.isEmpty ? "(none)" : parsed.fp}');
+    if (parsed.security == 'reality') {
+      _emit('Reality pbk: ${parsed.pbk.isNotEmpty ? "OK (${parsed.pbk.length} chars)" : "⚠ MISSING — подключение не заработает!"}');
+      _emit('Reality sid: ${parsed.sid.isNotEmpty ? "OK" : "⚠ MISSING — подключение не заработает!"}');
+    }
 
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('vpn_config', clean);
@@ -177,8 +183,34 @@ class WindowsVpnBackend implements VpnBackend {
     final xrayPath = await _ensureXrayExtracted();
     final configPath = await _writeXrayConfig();
 
+    // Убиваем любой зависший xray.exe перед запуском нового.
+    // Без этого порт 10808 остаётся занятым и новый процесс падает сразу.
+    _emit('Killing any existing xray.exe processes...');
+    try {
+      final kill = await Process.run('taskkill', ['/F', '/IM', 'xray.exe']);
+      if (kill.exitCode == 0) {
+        _emit('Killed existing xray.exe processes');
+        // Небольшая пауза чтобы ОС освободила порт
+        await Future.delayed(const Duration(milliseconds: 400));
+      } else {
+        _emit('No existing xray.exe found (ok)');
+      }
+    } catch (e) {
+      _emit('WARNING: taskkill failed: $e');
+    }
+
     _emit('Starting xray.exe...');
     _emit('Config: $configPath');
+
+    // Проверяем что порт 10808 свободен перед запуском
+    try {
+      final server = await ServerSocket.bind('127.0.0.1', 10808);
+      await server.close();
+    } catch (e) {
+      _emit('ERROR: Port 10808 still busy after cleanup: $e');
+      _emit('Waiting extra 600ms for OS to release port...');
+      await Future.delayed(const Duration(milliseconds: 600));
+    }
 
     _xrayProcess = await Process.start(xrayPath, ['run', '-config', configPath]);
 
@@ -213,12 +245,17 @@ class WindowsVpnBackend implements VpnBackend {
 
     // Процесс жив — вешаем обработчик неожиданного завершения в будущем
     _xrayProcess!.exitCode.then((code) {
-      _emit('xray.exe exited with code $code');
+      _emit('xray.exe exited unexpectedly with code $code');
       if (_proxyEnabled) {
         _disableSystemProxy().ignore();
         _proxyEnabled = false;
-        _statusController.add(BackendStatus.disconnected);
       }
+      if (_tunRouteAdded && _parsed != null) {
+        _removeTunRoutes(_parsed!.host).ignore();
+        _tunRouteAdded = false;
+      }
+      // Сигналим UI что VPN отвалился
+      _statusController.add(BackendStatus.disconnected);
     });
 
     _emit('xray.exe running (PID ${_xrayProcess!.pid})');
@@ -457,7 +494,7 @@ Future<String> _getTunIfIndex() async {
     // Классический Xray v5 конфиг
     final config =
      {
-      'log': {'loglevel': 'info', 'access': '', 'error': ''},
+      'log': {'loglevel': 'debug'},
       'dns': {
         'servers': ['1.1.1.1', '8.8.8.8'],
       },
@@ -492,12 +529,17 @@ Future<String> _getTunIfIndex() async {
                   {
                     'id': p.uuid,
                     'encryption': 'none',
-                    // flow нужен только для XTLS-Vision, для RAW/TCP оставляем пустым
-                    'flow': p.flow.isEmpty ? '' : p.flow,
+                    // flow добавляем ТОЛЬКО если задан (пустая строка вызывает ошибку xray при Reality)
+                    // flow отключаем при mux — они несовместимы
+                    // if (p.flow.isNotEmpty) 'flow': p.flow,
                   }
                 ],
               }
             ],
+          },
+          'mux': {
+              'enabled': true,
+              'concurrency': 8,
           },
           'streamSettings': {
             'network': p.type,         // 'tcp', 'ws', 'grpc' и т.д.

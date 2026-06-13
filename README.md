@@ -1,11 +1,12 @@
 # To the Max VPN!
 
-> A cross-platform VPN client built with Flutter, powered by VLESS protocol.
+> A cross-platform VPN client built with Flutter, powered by VLESS + Reality protocol.
 
-![Platform](https://img.shields.io/badge/platform-Windows-blue?style=flat-square)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-blue?style=flat-square)
 ![Flutter](https://img.shields.io/badge/Flutter-3.x-54C5F8?style=flat-square&logo=flutter)
-![Protocol](https://img.shields.io/badge/protocol-VLESS-orange?style=flat-square)
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+![Protocol](https://img.shields.io/badge/protocol-VLESS%20+%20Reality-orange?style=flat-square)
+![Xray](https://img.shields.io/badge/xray--core-v26.6.1-blueviolet?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
 
 <p align="center">
   <img src="screenshots/screenshot1.png" width="230" alt="TUN mode"/>
@@ -20,7 +21,8 @@
 - **Two connection modes on Windows:**
   - **System Proxy** — routes browser and most app traffic via HTTP proxy. No admin rights required.
   - **TUN Tunnel** — captures all OS-level traffic via a virtual network adapter (WinTUN). Requires administrator privileges.
-- **VLESS protocol** support with RAW/TCP, TLS, and Reality stream settings
+- **VLESS + Reality** — TLS 1.3 encryption with uTLS fingerprint masquerading, practically undetectable by DPI
+- **Mux (multiplexing)** — multiple logical streams over a single TCP connection, reduces handshakes and improves performance
 - **System tray** integration — minimize to tray, status icon updates in real time, exit cleanly
 - **Single instance** — clicking the shortcut a second time brings the existing window to focus
 - **Live logs** — real-time connection log with color coding, copyable to clipboard
@@ -51,7 +53,7 @@ lib/
 Flutter UI
   └─ WindowsVpnBackend
         ├─ extracts bundled xray.exe to AppData
-        ├─ writes VLESS config JSON
+        ├─ writes VLESS config JSON (with Mux enabled)
         ├─ launches xray.exe (SOCKS5 :10808, HTTP :10809)
         └─ sets Windows registry proxy → 127.0.0.1:10809
 ```
@@ -61,12 +63,19 @@ Flutter UI
 ```
 Flutter UI
   └─ WindowsVpnBackend
-        ├─ launches xray.exe (SOCKS5 :10808)
+        ├─ launches xray.exe (SOCKS5 :10808, Mux enabled)
         ├─ extracts bundled tun2socks.exe + wintun.dll
         ├─ launches tun2socks → WinTUN adapter "tun0"
         ├─ assigns 10.0.0.1/30 to tun0
         ├─ adds bypass route: VPN server IP → real gateway
         └─ adds default route: 0.0.0.0/0 → tun0 (metric 1)
+```
+
+### Connection pipeline
+
+```
+App → xray (Mux) → 1 TCP conn → Server (Reality) → Internet
+         └─ multiplexes all streams over a single encrypted connection
 ```
 
 ---
@@ -88,7 +97,7 @@ Place these files before building:
 | `xray.exe` | `assets/xray/xray.exe` | [XTLS/Xray-core releases](https://github.com/XTLS/Xray-core/releases/latest) — `Xray-windows-64.zip` |
 | `tun2socks.exe` | `assets/tun2socks/tun2socks.exe` | [xjasonlyu/tun2socks releases](https://github.com/xjasonlyu/tun2socks/releases/latest) — `tun2socks-windows-amd64.exe` |
 | `wintun.dll` | `assets/tun2socks/wintun.dll` | [wintun.net](https://www.wintun.net) — `amd64/wintun.dll` |
-| `*.ico` | `assets/tray/` | your own tray icons |
+| `*.ico` | `assets/tray/` | Tray icons (connected / connecting / disconnected) |
 
 ### Build
 
@@ -117,9 +126,22 @@ flutter run -d windows
 2. Click the **gear icon** → paste your `vless://...` invite link → **Save**
 3. Choose mode with the toggle at the bottom:
    - **System Proxy** — browsers and most apps
-   - **TUN Tunnel** — all OS traffic
+   - **TUN Tunnel** — all OS traffic (full VPN)
 4. Tap the shield button to connect
 5. Closing the window minimizes to tray. Right-click the tray icon → **Exit** to quit
+
+### Server requirements
+
+The client is designed for VLESS + Reality servers. Recommended setup:
+
+- **Panel:** [3x-ui](https://github.com/MHSanaei/3x-ui) or similar
+- **Protocol:** VLESS
+- **Network:** TCP
+- **Security:** Reality
+- **Flow:** _(leave empty — Mux is used instead of xtls-rprx-vision)_
+- **uTLS fingerprint:** `chrome`
+
+> ⚠️ **Important:** Do not enable `xtls-rprx-vision` flow on the server — it is incompatible with Mux multiplexing.
 
 ---
 
@@ -128,10 +150,13 @@ flutter run -d windows
 - [x] Windows — System Proxy mode
 - [x] Windows — TUN Tunnel mode
 - [x] System tray with live status
+- [x] VLESS + Reality support
+- [x] Mux multiplexing
 - [ ] Android support
 - [ ] iOS support
 - [ ] Auto-reconnect on network change
 - [ ] Multiple server profiles
+- [ ] Split tunneling
 
 ---
 
@@ -150,4 +175,4 @@ flutter run -d windows
 
 ## License
 
-GPL-3.0
+MIT

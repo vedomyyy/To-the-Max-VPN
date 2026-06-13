@@ -42,9 +42,25 @@ class VpnService extends ChangeNotifier {
   String get config => _backend.configUrl;
 
   /// Человекочитаемое имя сервера из конфига.
+  /// Показывает IP-адрес (компактно и однозначно).
+  /// Полное имя (из фрагмента ссылки) доступно через [serverLabel].
   String get serverName {
     final url = _backend.configUrl;
     if (url.isEmpty) return 'Не настроен';
+    final uri = Uri.tryParse(url);
+    if (uri == null) return 'Сервер';
+    // Показываем IP:port (или просто IP если порт стандартный 443)
+    final host = uri.host;
+    final port = uri.port;
+    if (host.isEmpty) return 'Сервер';
+    return port == 443 ? host : '$host:$port';
+  }
+
+  /// Полное имя сервера из фрагмента VLESS-ссылки (если есть).
+  /// Используется для тултипов / деталей.
+  String get serverLabel {
+    final url = _backend.configUrl;
+    if (url.isEmpty) return '';
     final uri = Uri.tryParse(url);
     final fragment = uri?.fragment ?? '';
     if (fragment.isNotEmpty) {
@@ -54,7 +70,7 @@ class VpnService extends ChangeNotifier {
         return fragment;
       }
     }
-    return uri?.host ?? 'Сервер';
+    return '';
   }
 
   /// Протокол из конфига.
