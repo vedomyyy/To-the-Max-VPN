@@ -32,6 +32,15 @@ android {
             signingConfig = signingConfigs.getByName("debug")
         }
     }
+
+    // ═══ КРИТИЧНО: извлечь .so файлы из APK на диск ═══
+    // Без этого libtun2socks.so остаётся внутри APK и
+    // не может быть запущен как процесс через ProcessBuilder
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 kotlin {

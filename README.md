@@ -21,9 +21,10 @@
 - **Two connection modes on Windows:**
   - **System Proxy** — routes browser and most app traffic via HTTP proxy. No admin rights required.
   - **TUN Tunnel** — captures all OS-level traffic via a virtual network adapter (WinTUN). Requires administrator privileges.
+- **Android support** — full device VPN via `flutter_v2ray` with TUN tunneling (all traffic routed through VPN)
 - **VLESS + Reality** — TLS 1.3 encryption with uTLS fingerprint masquerading, practically undetectable by DPI
 - **Mux (multiplexing)** — multiple logical streams over a single TCP connection, reduces handshakes and improves performance
-- **System tray** integration — minimize to tray, status icon updates in real time, exit cleanly
+- **System tray** integration (Windows) — minimize to tray, status icon updates in real time, exit cleanly
 - **Single instance** — clicking the shortcut a second time brings the existing window to focus
 - **Live logs** — real-time connection log with color coding, copyable to clipboard
 - **Ping display** — measures TCP round-trip time to the server before connecting
@@ -43,7 +44,7 @@ lib/
     ├── vpn_backend.dart          # Abstract backend interface
     ├── vpn_service.dart          # Facade — picks backend by platform
     ├── windows_vpn_backend.dart  # Windows: xray.exe + system proxy / TUN
-    ├── android_vpn_backend.dart  # Android: flutter_v2ray (WIP)
+    ├── android_vpn_backend.dart  # Android: flutter_v2ray + tun2socks
     └── tray_service.dart         # Windows tray icon + context menu
 ```
 
@@ -71,6 +72,17 @@ Flutter UI
         └─ adds default route: 0.0.0.0/0 → tun0 (metric 1)
 ```
 
+### Android — VPN mode
+
+```
+Flutter UI
+  └─ AndroidVpnBackend
+        ├─ flutter_v2ray starts Xray core (SOCKS5 :1080)
+        ├─ Android VpnService creates TUN interface
+        ├─ libtun2socks.so bridges TUN → SOCKS5
+        └─ all device traffic routed through VPN
+```
+
 ### Connection pipeline
 
 ```
@@ -85,10 +97,10 @@ App → xray (Mux) → 1 TCP conn → Server (Reality) → Internet
 ### Prerequisites
 
 - Flutter 3.x
-- Windows 10/11 x64
-- Visual Studio 2022 with **Desktop development with C++** workload
+- **Windows:** Windows 10/11 x64, Visual Studio 2022 with **Desktop development with C++** workload
+- **Android:** Android SDK, Android 5.0+ (API 21+), tested on Android 14
 
-### Bundled binaries
+### Bundled binaries (Windows only)
 
 Place these files before building:
 
@@ -99,8 +111,11 @@ Place these files before building:
 | `wintun.dll` | `assets/tun2socks/wintun.dll` | [wintun.net](https://www.wintun.net) — `amd64/wintun.dll` |
 | `*.ico` | `assets/tray/` | Tray icons (connected / connecting / disconnected) |
 
+Android uses `flutter_v2ray` which bundles Xray core and tun2socks natively — no extra binaries needed.
+
 ### Build
 
+**Windows:**
 ```bash
 flutter pub get
 flutter build windows
@@ -110,25 +125,39 @@ The output is at `build\windows\x64\runner\Release\vpn_client.exe`.
 
 > **TUN mode requires the app to run as Administrator.** The manifest is already configured with `requireAdministrator`.
 
+**Android:**
+```bash
+flutter pub get
+flutter build apk
+```
+
+The APK is at `build/app/outputs/flutter-apk/app-release.apk`.
+
+> ⚠️ `AndroidManifest.xml` must have `android:extractNativeLibs="true"` and `build.gradle.kts` must have `useLegacyPackaging = true` — otherwise `libtun2socks.so` stays inside the APK and can't be executed as a process.
+
 ### Run in development
 
-Open a terminal **as Administrator**, then:
-
+**Windows** (open a terminal **as Administrator**):
 ```bash
 flutter run -d windows
+```
+
+**Android:**
+```bash
+flutter run -d <device_id>
 ```
 
 ---
 
 ## Usage
 
-1. Launch the app (UAC prompt will appear for admin rights)
+1. Launch the app
 2. Click the **gear icon** → paste your `vless://...` invite link → **Save**
-3. Choose mode with the toggle at the bottom:
+3. **Windows:** choose mode with the toggle at the bottom:
    - **System Proxy** — browsers and most apps
    - **TUN Tunnel** — all OS traffic (full VPN)
-4. Tap the shield button to connect
-5. Closing the window minimizes to tray. Right-click the tray icon → **Exit** to quit
+4. **Android:** tap the shield button → accept VPN permission → connected
+5. Closing the window on Windows minimizes to tray. Right-click the tray icon → **Exit** to quit
 
 ### Server requirements
 
@@ -149,14 +178,16 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 
 - [x] Windows — System Proxy mode
 - [x] Windows — TUN Tunnel mode
+- [x] Android — full VPN mode
 - [x] System tray with live status
 - [x] VLESS + Reality support
 - [x] Mux multiplexing
-- [ ] Android support
 - [ ] iOS support
 - [ ] Auto-reconnect on network change
+- [ ] Kill switch
 - [ ] Multiple server profiles
 - [ ] Split tunneling
+- [ ] Traffic / speed stats
 
 ---
 
@@ -169,7 +200,7 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 | `windows_single_instance` | Single app instance enforcement |
 | `shared_preferences` | Persistent config storage |
 | `path_provider` | AppData directory for extracted binaries |
-| `flutter_v2ray` | Android VPN backend (WIP) |
+| `flutter_v2ray` | Android VPN backend (Xray core + tun2socks) |
 
 ---
 
