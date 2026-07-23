@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_v2ray/flutter_v2ray.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'vpn_backend.dart';
+import 'vpn_traffic_stats.dart';
 
 /// Android VPN backend — VLESS + Reality через flutter_v2ray.
 ///
@@ -19,14 +21,21 @@ import 'vpn_backend.dart';
 ///   - build.gradle.kts: packaging { jniLibs { useLegacyPackaging = true } }
 ///   Иначе libtun2socks.so остаётся внутри APK и не может быть запущен.
 class AndroidVpnBackend implements VpnBackend {
+  static const _configKey = 'vpn_config';
+
   final _statusController = StreamController<BackendStatus>.broadcast();
   final _logController = StreamController<String>.broadcast();
+  final _statsController = StreamController<VpnTrafficStats>.broadcast();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
   @override
   Stream<BackendStatus> get statusStream => _statusController.stream;
 
   @override
   Stream<String> get logStream => _logController.stream;
+
+  @override
+  Stream<VpnTrafficStats> get statsStream => _statsController.stream;
 
   @override
   String get configUrl => _configUrl;
@@ -40,6 +49,14 @@ class AndroidVpnBackend implements VpnBackend {
         'STATUS: ${status.state}'
         '  ↑${status.upload} (${status.uploadSpeed})'
         '  ↓${status.download} (${status.downloadSpeed})',
+      );
+      _statsController.add(
+        VpnTrafficStats(
+          uploadBytes: status.upload.toString(),
+          downloadBytes: status.download.toString(),
+          uploadSpeed: status.uploadSpeed.toString(),
+          downloadSpeed: status.downloadSpeed.toString(),
+        ),
       );
 
       switch (status.state) {
@@ -68,8 +85,7 @@ class AndroidVpnBackend implements VpnBackend {
       await _v2ray.initializeV2Ray();
       _emit('flutter_v2ray initialized');
 
-      final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString('vpn_config') ?? '';
+      final saved = await _readSavedConfig();
       if (saved.isNotEmpty) {
         await setConfig(saved);
       }
@@ -89,8 +105,9 @@ class AndroidVpnBackend implements VpnBackend {
       _parser = parser;
       _emit('Config parsed OK');
 
+      await _secureStorage.write(key: _configKey, value: clean);
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('vpn_config', clean);
+      await prefs.remove(_configKey);
     } catch (e, stack) {
       _parser = null;
       _emit('Config error: $e');
@@ -226,6 +243,29 @@ class AndroidVpnBackend implements VpnBackend {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
+  Future<String> _readSavedConfig() async {
+    try {
+      final secureValue = await _secureStorage.read(key: _configKey);
+      if (secureValue != null && secureValue.isNotEmpty) {
+        return secureValue;
+      }
+    } catch (e) {
+      _emit('Secure storage read failed: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final legacyValue = prefs.getString(_configKey) ?? '';
+    if (legacyValue.isNotEmpty) {
+      try {
+        await _secureStorage.write(key: _configKey, value: legacyValue);
+        await prefs.remove(_configKey);
+      } catch (e) {
+        _emit('Secure storage migration failed: $e');
+      }
+    }
+    return legacyValue;
+  }
+
   /// Очищает remark от мусора в URL (хэш-суффиксы и т.п.)
   String _safeRemark(String value, {required String fallback}) {
     if (value.trim().isEmpty) return fallback;
@@ -248,5 +288,6 @@ class AndroidVpnBackend implements VpnBackend {
   Future<void> dispose() async {
     await _statusController.close();
     await _logController.close();
+    await _statsController.close();
   }
 }

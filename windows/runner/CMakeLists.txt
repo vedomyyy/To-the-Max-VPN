@@ -40,5 +40,5 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 add_dependencies(${BINARY_NAME} flutter_assemble)
 
 set_target_properties(${BINARY_NAME} PROPERTIES
-  LINK_FLAGS "/MANIFESTUAC:\"level='requireAdministrator' uiAccess='false'\""
+  LINK_FLAGS "/MANIFESTUAC:\"level='asInvoker' uiAccess='false'\""
 )

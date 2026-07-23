@@ -5,7 +5,7 @@
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-blue?style=flat-square)
 ![Flutter](https://img.shields.io/badge/Flutter-3.x-54C5F8?style=flat-square&logo=flutter)
 ![Protocol](https://img.shields.io/badge/protocol-VLESS%20+%20Reality-orange?style=flat-square)
-![Xray](https://img.shields.io/badge/xray--core-v26.6.1-blueviolet?style=flat-square)
+![Xray](https://img.shields.io/badge/xray--core-v26.6.22-blueviolet?style=flat-square)
 ![License](https://img.shields.io/badge/license-GPL--3.0-green?style=flat-square)
 
 <p align="center">
@@ -28,7 +28,10 @@
 - **Single instance** — clicking the shortcut a second time brings the existing window to focus
 - **Live logs** — real-time connection log with color coding, copyable to clipboard
 - **Ping display** — measures TCP round-trip time to the server before connecting
-- **Persistent config** — saves your invite link across sessions
+- **Secure config storage** — invite link is stored via platform secure storage; legacy plain-text storage is migrated automatically
+- **Traffic & speed statistics** — live upload, download and current speed in the main screen
+- **Auto-reconnect** — reconnects an active session after a network change
+- **Windows fail-closed protection** — if xray/tun2socks exits unexpectedly, the active proxy/TUN routes remain until manual disconnect
 
 ---
 
@@ -45,7 +48,8 @@ lib/
     ├── vpn_service.dart          # Facade — picks backend by platform
     ├── windows_vpn_backend.dart  # Windows: xray.exe + system proxy / TUN
     ├── android_vpn_backend.dart  # Android: flutter_v2ray + tun2socks
-    └── tray_service.dart         # Windows tray icon + context menu
+    ├── tray_service.dart         # Windows tray icon + context menu
+    └── vpn_traffic_stats.dart    # Traffic counters and speed model
 ```
 
 ### Windows — System Proxy mode
@@ -123,7 +127,7 @@ flutter build windows
 
 The output is at `build\windows\x64\runner\Release\vpn_client.exe`.
 
-> **TUN mode requires the app to run as Administrator.** The manifest is already configured with `requireAdministrator`.
+> **TUN mode requires Administrator rights.** Start the app normally for Proxy mode, and run as Administrator only when you need TUN mode.
 
 **Android:**
 ```bash
@@ -133,14 +137,29 @@ flutter build apk
 
 The APK is at `build/app/outputs/flutter-apk/app-release.apk`.
 
-> ⚠️ `AndroidManifest.xml` must have `android:extractNativeLibs="true"` and `build.gradle.kts` must have `useLegacyPackaging = true` — otherwise `libtun2socks.so` stays inside the APK and can't be executed as a process.
+> ⚠️ `AndroidManifest.xml` already has `android:extractNativeLibs="true"` and `build.gradle.kts` has `useLegacyPackaging = true`. Keep both: otherwise `libtun2socks.so` stays inside the APK and can't be executed as a process.
+
+### Android release signing
+
+For a distributable APK, create `android/key.properties` (it is gitignored) and point it to your keystore:
+
+```properties
+storePassword=YOUR_STORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=upload
+storeFile=C:/path/to/upload-keystore.jks
+```
+
+Without this file, local release builds deliberately fall back to the debug key. Do not publish that APK to an app store.
 
 ### Run in development
 
-**Windows** (open a terminal **as Administrator**):
+**Windows**:
 ```bash
 flutter run -d windows
 ```
+
+> For TUN mode, run the terminal as Administrator before launch.
 
 **Android:**
 ```bash
@@ -172,6 +191,8 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 
 > ⚠️ **Important:** Do not enable `xtls-rprx-vision` flow on the server — it is incompatible with Mux multiplexing.
 
+> ⚠️ **Reality target:** choose a target with a compact TLS certificate chain. `one.one.one.one:443` is a known-working option with xray 26.6.22; targets with very large chains can make the Reality handshake fail.
+
 ---
 
 ## Roadmap
@@ -182,12 +203,12 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 - [x] System tray with live status
 - [x] VLESS + Reality support
 - [x] Mux multiplexing
+- [x] Auto-reconnect on network change
+- [x] Windows fail-closed protection for xray/tun2socks crashes *(not a full OS-wide kill switch; IPv6 and apps that ignore the Windows system proxy are future work)*
+- [x] Traffic / speed stats
 - [ ] iOS support
-- [ ] Auto-reconnect on network change
-- [ ] Kill switch
 - [ ] Multiple server profiles
 - [ ] Split tunneling
-- [ ] Traffic / speed stats
 
 ---
 
@@ -198,7 +219,9 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 | `window_manager` | Window controls, prevent-close → minimize to tray |
 | `tray_manager` | System tray icon and context menu |
 | `windows_single_instance` | Single app instance enforcement |
-| `shared_preferences` | Persistent config storage |
+| `flutter_secure_storage` | Encrypted platform storage for the invite link |
+| `shared_preferences` | One-time migration from legacy config storage |
+| `connectivity_plus` | Detect network changes for auto-reconnect |
 | `path_provider` | AppData directory for extracted binaries |
 | `flutter_v2ray` | Android VPN backend (Xray core + tun2socks) |
 

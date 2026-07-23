@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -5,6 +7,25 @@ plugins {
 }
 
 android {
+        signingConfigs {
+            create("release") {
+                val keystorePropsFile = rootProject.file("key.properties")
+                if (keystorePropsFile.exists()) {
+                    val keystoreProps = Properties().apply {
+                        keystorePropsFile.inputStream().use { load(it) }
+                    }
+
+                    val storeFilePath = keystoreProps.getProperty("storeFile")
+                    if (!storeFilePath.isNullOrBlank()) {
+                        storeFile = file(storeFilePath)
+                        storePassword = keystoreProps.getProperty("storePassword")
+                        keyAlias = keystoreProps.getProperty("keyAlias")
+                        keyPassword = keystoreProps.getProperty("keyPassword")
+                    }
+                }
+            }
+        }
+
     namespace = "com.example.vpn_client"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
@@ -27,9 +48,12 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            val releaseSigning = signingConfigs.getByName("release")
+            signingConfig = if (releaseSigning.storeFile != null) {
+                releaseSigning
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

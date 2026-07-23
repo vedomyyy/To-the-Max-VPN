@@ -2,11 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'vpn_backend.dart';
+import 'vpn_traffic_stats.dart';
 
 /// Реализация VPN для Windows.
 ///
@@ -25,6 +27,10 @@ import 'vpn_backend.dart';
 ///     (весь трафик ОС). Требует прав администратора + WinTUN драйвер.
 ///     Реализован в фазе 2 — сейчас бросает [UnimplementedError].
 class WindowsVpnBackend implements VpnBackend {
+  static const _configKey = 'vpn_config';
+  static const _statsInterval = Duration(seconds: 1);
+  static const _apiPort = 10085;
+
   WindowsVpnMode mode;
 
   WindowsVpnBackend({this.mode = WindowsVpnMode.systemProxy});
@@ -32,12 +38,17 @@ class WindowsVpnBackend implements VpnBackend {
   // ── Streams ──────────────────────────────────────────────────────────────
   final _statusController = StreamController<BackendStatus>.broadcast();
   final _logController = StreamController<String>.broadcast();
+  final _statsController = StreamController<VpnTrafficStats>.broadcast();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
   @override
   Stream<BackendStatus> get statusStream => _statusController.stream;
 
   @override
   Stream<String> get logStream => _logController.stream;
+
+  @override
+  Stream<VpnTrafficStats> get statsStream => _statsController.stream;
 
   // ── Config state ─────────────────────────────────────────────────────────
   @override
@@ -49,6 +60,11 @@ class WindowsVpnBackend implements VpnBackend {
   // ── Process state ─────────────────────────────────────────────────────────
   Process? _xrayProcess;
   Process? _tun2socksProcess;
+  String? _xrayPath;
+  Timer? _statsTimer;
+  int _lastRxBytes = 0;
+  int _lastTxBytes = 0;
+  DateTime? _lastStatsSampleAt;
   bool _proxyEnabled = false;
   bool _tunRouteAdded = false;
   // Имя TUN-адаптера, который поднимет tun2socks
@@ -72,8 +88,7 @@ class WindowsVpnBackend implements VpnBackend {
       _emit('xray.exe path: $xrayPath');
 
       // Восстанавливаем сохранённый конфиг
-      final prefs = await SharedPreferences.getInstance();
-      final saved = prefs.getString('vpn_config') ?? '';
+      final saved = await _readSavedConfig();
       if (saved.isNotEmpty) {
         _emit('Restoring saved config...');
         await setConfig(saved);
@@ -88,7 +103,7 @@ class WindowsVpnBackend implements VpnBackend {
   Future<void> setConfig(String url) async {
     final clean = url.trim();
     _emit('========== SET CONFIG ==========');
-    _emit('URL: $clean');
+    _emit('URL: ${_maskConfigForLog(clean)}');
 
     final parsed = _ParsedVless.tryParse(clean);
     if (parsed == null) {
@@ -98,7 +113,7 @@ class WindowsVpnBackend implements VpnBackend {
 
     _configUrl = clean;
     _parsed = parsed;
-    _emit('Parsed: host=${parsed.host} port=${parsed.port} uuid=${parsed.uuid}');
+    _emit('Parsed: host=${parsed.host} port=${parsed.port} uuid=${_maskUuid(parsed.uuid)}');
     _emit('Security: ${parsed.security}, type: ${parsed.type}, flow: ${parsed.flow.isEmpty ? "(none)" : parsed.flow}');
     _emit('SNI: ${parsed.sni.isEmpty ? "(none)" : parsed.sni}, fp: ${parsed.fp.isEmpty ? "(none)" : parsed.fp}');
     if (parsed.security == 'reality') {
@@ -106,8 +121,9 @@ class WindowsVpnBackend implements VpnBackend {
       _emit('Reality sid: ${parsed.sid.isNotEmpty ? "OK" : "⚠ MISSING — подключение не заработает!"}');
     }
 
+    await _secureStorage.write(key: _configKey, value: clean);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('vpn_config', clean);
+    await prefs.remove(_configKey);
   }
 
   @override
@@ -156,6 +172,8 @@ class WindowsVpnBackend implements VpnBackend {
         await _startTun();
       }
 
+      _startStatsPolling();
+
       _statusController.add(BackendStatus.connected);
       _emit('VPN STATUS => CONNECTED');
 
@@ -181,6 +199,7 @@ class WindowsVpnBackend implements VpnBackend {
 
   Future<void> _startXray() async {
     final xrayPath = await _ensureXrayExtracted();
+    _xrayPath = xrayPath;
     final configPath = await _writeXrayConfig();
 
     // Убиваем любой зависший xray.exe перед запуском нового.
@@ -246,14 +265,7 @@ class WindowsVpnBackend implements VpnBackend {
     // Процесс жив — вешаем обработчик неожиданного завершения в будущем
     _xrayProcess!.exitCode.then((code) {
       _emit('xray.exe exited unexpectedly with code $code');
-      if (_proxyEnabled) {
-        _disableSystemProxy().ignore();
-        _proxyEnabled = false;
-      }
-      if (_tunRouteAdded && _parsed != null) {
-        _removeTunRoutes(_parsed!.host).ignore();
-        _tunRouteAdded = false;
-      }
+      _emit('Kill switch active: leaving proxy/routes in place until manual disconnect');
       // Сигналим UI что VPN отвалился
       _statusController.add(BackendStatus.disconnected);
     });
@@ -291,6 +303,47 @@ class WindowsVpnBackend implements VpnBackend {
     }
 
     return xrayFile.path;
+  }
+
+  Future<String> _readSavedConfig() async {
+    try {
+      final secureValue = await _secureStorage.read(key: _configKey);
+      if (secureValue != null && secureValue.isNotEmpty) {
+        return secureValue;
+      }
+    } catch (e) {
+      _emit('Secure storage read failed: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final legacyValue = prefs.getString(_configKey) ?? '';
+    if (legacyValue.isNotEmpty) {
+      try {
+        await _secureStorage.write(key: _configKey, value: legacyValue);
+        await prefs.remove(_configKey);
+      } catch (e) {
+        _emit('Secure storage migration failed: $e');
+      }
+    }
+    return legacyValue;
+  }
+
+  String _maskConfigForLog(String value) {
+    try {
+      final uri = Uri.parse(value);
+      final user = uri.userInfo;
+      final safeUser = user.isEmpty ? '' : '${_maskUuid(user)}@';
+      final host = uri.host;
+      final port = uri.hasPort ? ':${uri.port}' : '';
+      return '${uri.scheme}://$safeUser$host$port?...';
+    } catch (_) {
+      return '***';
+    }
+  }
+
+  String _maskUuid(String value) {
+    if (value.length <= 8) return '***';
+    return '${value.substring(0, 4)}...${value.substring(value.length - 4)}';
   }
 
   // ── TUN tunnel (tun2socks + WinTUN) ──────────────────────────────────────
@@ -375,17 +428,16 @@ class WindowsVpnBackend implements VpnBackend {
     // Ждём пока адаптер поднимется
     await Future.delayed(const Duration(milliseconds: 500));
 
+    _resetStatsBaseline();
+
     // Настраиваем адаптер через netsh и добавляем маршруты
     await _configureTunAdapter(serverIp);
 
     // Следим за неожиданным завершением
     _tun2socksProcess!.exitCode.then((code) {
       _emit('tun2socks.exe exited with code $code');
-      if (_tunRouteAdded) {
-        _removeTunRoutes(serverIp).ignore();
-        _tunRouteAdded = false;
-        _statusController.add(BackendStatus.disconnected);
-      }
+      _emit('Kill switch active: keeping TUN routes in place until manual disconnect');
+      _statusController.add(BackendStatus.disconnected);
     });
   }
 
@@ -494,7 +546,29 @@ Future<String> _getTunIfIndex() async {
     // Классический Xray v5 конфиг
     final config =
      {
-      'log': {'loglevel': 'debug'},
+      'log': {'loglevel': 'warning'},
+      'stats': {},
+      'api': {
+        'tag': 'api',
+        'listen': '127.0.0.1:$_apiPort',
+        'services': ['StatsService'],
+      },
+      'policy': {
+        'levels': {
+          '0': {
+            'statsUserUplink': false,
+            'statsUserDownlink': false,
+            'statsUserOnline': false,
+            'bufferSize': 4,
+          },
+        },
+        'system': {
+          'statsInboundUplink': false,
+          'statsInboundDownlink': false,
+          'statsOutboundUplink': true,
+          'statsOutboundDownlink': true,
+        },
+      },
       'dns': {
         'servers': ['1.1.1.1', '8.8.8.8'],
       },
@@ -715,6 +789,7 @@ $t::InternetSetOption(0,37,[IntPtr]::Zero,0)  # INTERNET_OPTION_REFRESH
   // ── Cleanup ───────────────────────────────────────────────────────────────
 
   Future<void> _cleanup() async {
+    _stopStatsPolling();
     if (_proxyEnabled) {
       await _disableSystemProxy().onError((e, _) => _emit('ERROR disabling proxy: $e'));
     }
@@ -743,6 +818,111 @@ $t::InternetSetOption(0,37,[IntPtr]::Zero,0)  # INTERNET_OPTION_REFRESH
     await _cleanup();
     await _statusController.close();
     await _logController.close();
+    await _statsController.close();
+  }
+
+  void _startStatsPolling() {
+    if (_xrayPath == null) return;
+    _stopStatsPolling();
+    _statsTimer = Timer.periodic(_statsInterval, (_) => _pollTunStats());
+    _emit('Windows stats polling started via Xray API');
+  }
+
+  void _stopStatsPolling() {
+    _statsTimer?.cancel();
+    _statsTimer = null;
+    _lastStatsSampleAt = null;
+    _lastRxBytes = 0;
+    _lastTxBytes = 0;
+  }
+
+  void _resetStatsBaseline() {
+    _lastStatsSampleAt = DateTime.now();
+    _lastRxBytes = 0;
+    _lastTxBytes = 0;
+  }
+
+  Future<void> _pollTunStats() async {
+    if (_statsController.isClosed || _xrayPath == null) return;
+    try {
+      final result = await Process.run(_xrayPath!, [
+        'api',
+        'statsquery',
+        '--server=127.0.0.1:$_apiPort',
+        '-pattern',
+        'outbound>>>proxy>>>traffic>>>',
+      ]);
+
+      if (result.exitCode != 0) {
+        _emit('WARNING: xray stats query failed: ${result.stderr}');
+        return;
+      }
+
+      final raw = result.stdout.toString().trim();
+      if (raw.isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+
+      final stats = decoded['stat'];
+      if (stats is! List) return;
+
+      int rxBytes = 0;
+      int txBytes = 0;
+      for (final entry in stats) {
+        if (entry is! Map) continue;
+        final name = entry['name']?.toString() ?? '';
+        final value = int.tryParse(entry['value'].toString()) ?? 0;
+        if (name == 'outbound>>>proxy>>>traffic>>>downlink') {
+          rxBytes = value;
+        } else if (name == 'outbound>>>proxy>>>traffic>>>uplink') {
+          txBytes = value;
+        }
+      }
+      final now = DateTime.now();
+
+      double seconds = 1;
+      if (_lastStatsSampleAt != null) {
+        seconds = now.difference(_lastStatsSampleAt!).inMilliseconds / 1000;
+        if (seconds <= 0) seconds = 1;
+      }
+
+      final rxDelta = rxBytes >= _lastRxBytes ? rxBytes - _lastRxBytes : 0;
+      final txDelta = txBytes >= _lastTxBytes ? txBytes - _lastTxBytes : 0;
+
+      _lastRxBytes = rxBytes;
+      _lastTxBytes = txBytes;
+      _lastStatsSampleAt = now;
+
+      _statsController.add(
+        VpnTrafficStats(
+          uploadBytes: _formatBytes(txBytes),
+          downloadBytes: _formatBytes(rxBytes),
+          uploadSpeed: _formatRate(txDelta / seconds),
+          downloadSpeed: _formatRate(rxDelta / seconds),
+        ),
+      );
+    } catch (e) {
+      _emit('WARNING: xray stats polling error: $e');
+    }
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    double value = bytes.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    final fractionDigits = value >= 10 || unit == 0 ? 0 : 1;
+    return '${value.toStringAsFixed(fractionDigits)} ${units[unit]}';
+  }
+
+  String _formatRate(double bytesPerSecond) {
+    if (bytesPerSecond <= 0) return '0 B/s';
+    return '${_formatBytes(bytesPerSecond.round())}/s';
   }
 }
 

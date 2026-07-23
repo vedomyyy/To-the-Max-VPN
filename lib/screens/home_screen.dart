@@ -24,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _animController;
   late Animation<double> _scaleAnim;
+  late final VoidCallback _vpnListener;
 
   @override
   void initState() {
@@ -35,11 +36,13 @@ class _HomeScreenState extends State<HomeScreen>
     _scaleAnim = Tween<double>(begin: 1.0, end: 0.93).animate(
       CurvedAnimation(parent: _animController, curve: Curves.easeInOut),
     );
-    widget.vpnService.addListener(() => setState(() {}));
+    _vpnListener = () => setState(() {});
+    widget.vpnService.addListener(_vpnListener);
   }
 
   @override
   void dispose() {
+    widget.vpnService.removeListener(_vpnListener);
     _animController.dispose();
     super.dispose();
   }
@@ -121,7 +124,7 @@ class _HomeScreenState extends State<HomeScreen>
                 fontSize: 13,
                 color: svc.isConnected
                     ? kTextFaint
-                    : kAccentOff.withOpacity(0.7),
+                    : kAccentOff.withValues(alpha: 0.7),
               ),
             ),
             const SizedBox(height: 48),
@@ -136,11 +139,11 @@ class _HomeScreenState extends State<HomeScreen>
                   height: 180,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: color.withOpacity(0.15),
+                    color: color.withValues(alpha: 0.15),
                     border: Border.all(color: color, width: 3),
                     boxShadow: [
                       BoxShadow(
-                        color: color.withOpacity(0.3),
+                        color: color.withValues(alpha: 0.3),
                         blurRadius: 40,
                         spreadRadius: 10,
                       ),
@@ -167,17 +170,32 @@ class _HomeScreenState extends State<HomeScreen>
               margin: const EdgeInsets.symmetric(horizontal: 32),
               padding: const EdgeInsets.all(20),
               decoration: BoxDecoration(
-                color: kCard.withOpacity(0.3),
+                color: kCard.withValues(alpha: 0.3),
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+              child: Column(
                 children: [
-                  _statItem('Сервер', svc.serverName),
-                  _divider(),
-                  _statItem('Протокол', svc.protocol),
-                  _divider(),
-                  _statItem('Пинг', svc.isConnected ? '${svc.ping} ms' : '— ms'),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _statItem('Сервер', svc.serverName),
+                      _divider(),
+                      _statItem('Протокол', svc.protocol),
+                      _divider(),
+                      _statItem('Пинг', svc.isConnected ? '${svc.ping} ms' : '— ms'),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _statItem('Upload', svc.traffic.uploadBytes),
+                      _divider(),
+                      _statItem('Download', svc.traffic.downloadBytes),
+                      _divider(),
+                      _statItem('Speed', _speedLabel(svc)),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -211,6 +229,12 @@ class _HomeScreenState extends State<HomeScreen>
 
   Widget _divider() =>
       Container(width: 1, height: 32, color: kTextFaint);
+
+  String _speedLabel(VpnService svc) {
+    final upload = svc.traffic.uploadSpeed;
+    final download = svc.traffic.downloadSpeed;
+    return '↑ $upload / ↓ $download';
+  }
 }
 
 /// Бейдж платформы в AppBar
@@ -223,9 +247,9 @@ class _WindowsBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: kTextFaint.withOpacity(0.2),
+        color: kTextFaint.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: kTextFaint.withOpacity(0.4)),
+        border: Border.all(color: kTextFaint.withValues(alpha: 0.4)),
       ),
       child: Text(
         vpnService.windowsMode == WindowsVpnMode.systemProxy ? 'Proxy' : 'TUN',
@@ -248,9 +272,9 @@ class _WindowsModeToggle extends StatelessWidget {
       margin: const EdgeInsets.symmetric(horizontal: 32),
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
       decoration: BoxDecoration(
-        color: kCard.withOpacity(0.15),
+        color: kCard.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: kTextFaint.withOpacity(0.2)),
+        border: Border.all(color: kTextFaint.withValues(alpha: 0.2)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -282,9 +306,10 @@ class _WindowsModeToggle extends StatelessWidget {
                         ? WindowsVpnMode.tunTunnel
                         : WindowsVpnMode.systemProxy;
                   },
-            activeColor: kAccentOn,
+            activeThumbColor: kAccentOn,
+            activeTrackColor: kAccentOn.withValues(alpha: 0.45),
             inactiveThumbColor: kAccentOff,
-            inactiveTrackColor: kTextFaint.withOpacity(0.3),
+            inactiveTrackColor: kTextFaint.withValues(alpha: 0.3),
           ),
         ],
       ),

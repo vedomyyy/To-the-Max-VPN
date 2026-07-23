@@ -14,10 +14,10 @@ class TrayService with TrayListener {
   final VoidCallback onExit;
 
   TrayService({
-    required VpnService vpn,
+    required this._vpn,
     required this.onShowWindow,
     required this.onExit,
-  }) : _vpn = vpn;
+  });
 
   Future<void> initialize() async {
     if (!Platform.isWindows) return;

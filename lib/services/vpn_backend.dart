@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'vpn_traffic_stats.dart';
+
 /// Абстрактный интерфейс для платформенных бэкендов VPN.
 /// Android реализует через flutter_v2ray, Windows — через xray.exe + системный прокси.
 abstract class VpnBackend {
@@ -8,6 +10,9 @@ abstract class VpnBackend {
 
   /// Поток логов (одна строка на событие, без временной метки — VpnService добавит).
   Stream<String> get logStream;
+
+  /// Поток статистики трафика и скорости.
+  Stream<VpnTrafficStats> get statsStream;
 
   /// Инициализация (запрос разрешений, проверка бинарей и т.д.).
   Future<void> initialize();

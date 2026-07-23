@@ -96,6 +96,7 @@ class _VpnAppState extends State<VpnApp> with WindowListener {
     if (widget.vpnService.isConnected) {
       await widget.vpnService.toggle();
     }
+    await widget.vpnService.shutdown();
     await _tray.dispose();
     exit(0);
   }

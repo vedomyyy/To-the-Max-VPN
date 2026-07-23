@@ -32,7 +32,7 @@ class _ConfigScreenState extends State<ConfigScreen> {
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _save() async {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
 
@@ -62,12 +62,26 @@ class _ConfigScreenState extends State<ConfigScreen> {
       }
     } catch (_) {}
 
-    widget.vpnService.setConfig(text);
+    try {
+      await widget.vpnService.setConfig(text);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Ошибка конфига: $e'),
+          backgroundColor: Colors.red.shade900,
+          duration: const Duration(seconds: 4),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) return;
 
     if (warningMessage != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(warningMessage!),
+          content: Text(warningMessage),
           backgroundColor: Colors.orange.shade900,
           duration: const Duration(seconds: 4),
         ),
@@ -109,9 +123,9 @@ class _ConfigScreenState extends State<ConfigScreen> {
             const SizedBox(height: 16),
             Container(
               decoration: BoxDecoration(
-                color: kCard.withOpacity(0.2),
+                color: kCard.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: kTextFaint.withOpacity(0.3)),
+                border: Border.all(color: kTextFaint.withValues(alpha: 0.3)),
               ),
               child: TextField(
                 controller: _controller,
@@ -132,12 +146,12 @@ class _ConfigScreenState extends State<ConfigScreen> {
               child: ElevatedButton(
                 onPressed: _save,
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: kAccentOn.withOpacity(0.2),
+                  backgroundColor: kAccentOn.withValues(alpha: 0.2),
                   foregroundColor: kTextPrimary,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
-                    side: BorderSide(color: kAccentOn.withOpacity(0.5)),
+                    side: BorderSide(color: kAccentOn.withValues(alpha: 0.5)),
                   ),
                 ),
                 child: const Text('Сохранить',
@@ -171,9 +185,9 @@ class _ConfigScreenState extends State<ConfigScreen> {
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black.withValues(alpha: 0.3),
                   borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: kTextFaint.withOpacity(0.2)),
+                  border: Border.all(color: kTextFaint.withValues(alpha: 0.2)),
                 ),
                 child: ListenableBuilder(
                   listenable: widget.vpnService,

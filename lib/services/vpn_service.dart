@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 import 'vpn_backend.dart';
 import 'android_vpn_backend.dart';
 import 'windows_vpn_backend.dart';
+import 'vpn_traffic_stats.dart';
 
 export 'vpn_backend.dart' show VpnConfigException;
 export 'windows_vpn_backend.dart' show WindowsVpnMode;
@@ -24,10 +26,16 @@ class VpnService extends ChangeNotifier {
 
   StreamSubscription<BackendStatus>? _statusSub;
   StreamSubscription<String>? _logSub;
+  StreamSubscription<VpnTrafficStats>? _statsSub;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  bool _isShuttingDown = false;
+  bool _reconnectPending = false;
+  bool _reconnectInProgress = false;
 
   // ── State ────────────────────────────────────────────────────────────────
   VpnStatus _status = VpnStatus.disconnected;
   int _ping = 0;
+  VpnTrafficStats _traffic = VpnTrafficStats.zero;
   final List<String> _logs = [];
 
   // ── Windows-specific: текущий режим ──────────────────────────────────────
@@ -37,6 +45,7 @@ class VpnService extends ChangeNotifier {
   VpnStatus get status => _status;
   bool get isConnected => _status == VpnStatus.connected;
   int get ping => _ping;
+  VpnTrafficStats get traffic => _traffic;
   List<String> get logs => List.unmodifiable(_logs);
 
   String get config => _backend.configUrl;
@@ -83,8 +92,8 @@ class VpnService extends ChangeNotifier {
   /// Только Windows: переключить режим proxy ↔ TUN.
   WindowsVpnMode get windowsMode => _windowsMode;
   set windowsMode(WindowsVpnMode m) {
-    if (_backend is WindowsVpnBackend) {
-      (_backend as WindowsVpnBackend).mode = m;
+    if (_backend case final WindowsVpnBackend backend) {
+      backend.mode = m;
       _windowsMode = m;
       notifyListeners();
     }
@@ -102,6 +111,8 @@ class VpnService extends ChangeNotifier {
 
     _statusSub = _backend.statusStream.listen(_onBackendStatus);
     _logSub = _backend.logStream.listen(_onBackendLog);
+    _statsSub = _backend.statsStream.listen(_onBackendStats);
+    _connectivitySub = Connectivity().onConnectivityChanged.listen(_onConnectivityChanged);
 
     await _backend.initialize();
   }
@@ -114,13 +125,15 @@ class VpnService extends ChangeNotifier {
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  void setConfig(String url) {
-    _backend.setConfig(url).then((_) {
+  Future<void> setConfig(String url) async {
+    try {
+      await _backend.setConfig(url);
       notifyListeners();
-    }).catchError((e) {
+    } catch (e) {
       _log('CONFIG ERROR: $e');
       notifyListeners();
-    });
+      rethrow;
+    }
   }
 
   Future<void> toggle() async {
@@ -135,6 +148,24 @@ class VpnService extends ChangeNotifier {
         notifyListeners();
       });
       await _backend.connect();
+    }
+  }
+
+  Future<void> reconnect() async {
+    if (_reconnectInProgress || _isShuttingDown) return;
+    _reconnectInProgress = true;
+    try {
+      _log('Network changed, reconnecting VPN...');
+      try {
+        await _backend.disconnect();
+      } catch (e) {
+        _log('Reconnect cleanup warning: $e');
+      }
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _backend.connect();
+    } finally {
+      _reconnectInProgress = false;
+      _reconnectPending = false;
     }
   }
 
@@ -155,6 +186,28 @@ class VpnService extends ChangeNotifier {
     _log(line, fromBackend: true);
   }
 
+  void _onBackendStats(VpnTrafficStats stats) {
+    _traffic = stats;
+    notifyListeners();
+  }
+
+  void _onConnectivityChanged(List<ConnectivityResult> results) {
+    if (_isShuttingDown) return;
+
+    final hasNetwork = results.any((result) => result != ConnectivityResult.none);
+    if (!hasNetwork) {
+      if (_status == VpnStatus.connected) {
+        _reconnectPending = true;
+        _log('Network lost, waiting for reconnect...');
+      }
+      return;
+    }
+
+    if (_reconnectPending || _status == VpnStatus.connected) {
+      unawaited(reconnect());
+    }
+  }
+
   void _log(String message, {bool fromBackend = false}) {
     final time = DateTime.now().toString().substring(11, 19);
     // Бэкенды не добавляют время — добавляем здесь.
@@ -167,11 +220,20 @@ class VpnService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> shutdown() async {
+    if (_isShuttingDown) return;
+    _isShuttingDown = true;
+
+    await _statusSub?.cancel();
+    await _logSub?.cancel();
+    await _statsSub?.cancel();
+    await _connectivitySub?.cancel();
+    await _backend.dispose();
+  }
+
   @override
   void dispose() {
-    _statusSub?.cancel();
-    _logSub?.cancel();
-    _backend.dispose();
+    unawaited(shutdown());
     super.dispose();
   }
 }
