@@ -32,6 +32,23 @@ class VpnService extends ChangeNotifier {
   bool _reconnectPending = false;
   bool _reconnectInProgress = false;
 
+  /// Пока не истечёт — игнорируем connectivity-события.
+  /// Нужно чтобы не принимать за "смену сети" наши же действия:
+  /// поднятие/снятие TUN-адаптера (tun0 / Android VpnService) само по себе
+  /// меняет сетевую конфигурацию и иначе триггерит бесконечный reconnect.
+  DateTime? _ignoreConnectivityUntil;
+
+  /// Последний набор транспортов (без VPN-псевдоинтерфейса), которым
+  /// мы уже отреагировали — чтобы не дёргать reconnect повторно на
+  /// дублирующиеся/идентичные события от connectivity_plus.
+  Set<ConnectivityResult>? _lastMeaningfulConnectivity;
+
+  static const _connectivitySuppressWindow = Duration(seconds: 5);
+
+  void _suppressConnectivity([Duration duration = _connectivitySuppressWindow]) {
+    _ignoreConnectivityUntil = DateTime.now().add(duration);
+  }
+
   // ── State ────────────────────────────────────────────────────────────────
   VpnStatus _status = VpnStatus.disconnected;
   int _ping = 0;
@@ -137,6 +154,11 @@ class VpnService extends ChangeNotifier {
   }
 
   Future<void> toggle() async {
+    // Подавляем connectivity-события на время подключения/отключения:
+    // сама операция (поднятие TUN / VpnService) выглядит для ОС как
+    // "смена сети", и без подавления это тут же вызвало бы reconnect().
+    _suppressConnectivity();
+
     if (_status == VpnStatus.connected) {
       await _backend.disconnect();
     } else if (_status == VpnStatus.disconnected || _status == VpnStatus.error) {
@@ -148,12 +170,17 @@ class VpnService extends ChangeNotifier {
         notifyListeners();
       });
       await _backend.connect();
+      // На случай если поднятие адаптера/маршрутов происходит с задержкой
+      // (netsh/route в отдельных процессах) — продлеваем окно подавления
+      // ещё немного уже после того, как connect() формально завершился.
+      _suppressConnectivity();
     }
   }
 
   Future<void> reconnect() async {
     if (_reconnectInProgress || _isShuttingDown) return;
     _reconnectInProgress = true;
+    _suppressConnectivity();
     try {
       _log('Network changed, reconnecting VPN...');
       try {
@@ -163,6 +190,7 @@ class VpnService extends ChangeNotifier {
       }
       await Future.delayed(const Duration(milliseconds: 500));
       await _backend.connect();
+      _suppressConnectivity();
     } finally {
       _reconnectInProgress = false;
       _reconnectPending = false;
@@ -194,12 +222,38 @@ class VpnService extends ChangeNotifier {
   void _onConnectivityChanged(List<ConnectivityResult> results) {
     if (_isShuttingDown) return;
 
-    final hasNetwork = results.any((result) => result != ConnectivityResult.none);
-    if (!hasNetwork) {
+    // 1. Событие вызвано нашим же подключением/отключением/reconnect —
+    //    ещё не истекло окно подавления. Игнорируем целиком.
+    final ignoreUntil = _ignoreConnectivityUntil;
+    if (ignoreUntil != null && DateTime.now().isBefore(ignoreUntil)) {
+      return;
+    }
+
+    // 2. Убираем из списка сам VPN-псевдоинтерфейс — появление или
+    //    исчезновение ConnectivityResult.vpn говорит о том, что поднялся
+    //    или упал наш собственный туннель, а не о реальной смене сети
+    //    (Wi-Fi ↔ мобильная сеть ↔ провод). Если после фильтрации остаётся
+    //    тот же набор транспортов, что и раньше — это не смена сети.
+    final meaningful = results
+        .where((r) => r != ConnectivityResult.vpn && r != ConnectivityResult.none)
+        .toSet();
+
+    if (meaningful.isEmpty) {
       if (_status == VpnStatus.connected) {
         _reconnectPending = true;
         _log('Network lost, waiting for reconnect...');
       }
+      _lastMeaningfulConnectivity = meaningful;
+      return;
+    }
+
+    // 3. Если базовый транспорт (например Wi-Fi) не менялся с прошлого
+    //    "настоящего" события — это дребезг/повторное уведомление ОС,
+    //    а не реальное переключение сети. Не реагируем.
+    final unchanged = _lastMeaningfulConnectivity != null &&
+        setEquals(_lastMeaningfulConnectivity, meaningful);
+    _lastMeaningfulConnectivity = meaningful;
+    if (unchanged && !_reconnectPending) {
       return;
     }
 
