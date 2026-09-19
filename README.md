@@ -30,7 +30,7 @@
 - **Ping display** — measures TCP round-trip time to the server before connecting
 - **Secure config storage** — invite link is stored via platform secure storage; legacy plain-text storage is migrated automatically
 - **Traffic & speed statistics** — live upload, download and current speed in the main screen
-- **Auto-reconnect** — reconnects an active session after a network change
+- **Auto-reconnect** — reconnects an active session after a real network change (Wi-Fi ↔ mobile ↔ wired). Filters out connectivity events caused by the VPN's own TUN interface coming up/down, so it no longer loops disconnect/reconnect against itself (fixed 2026-09-19)
 - **Windows fail-closed protection** — if xray/tun2socks exits unexpectedly, the active proxy/TUN routes remain until manual disconnect
 
 ---
@@ -203,7 +203,7 @@ The client is designed for VLESS + Reality servers. Recommended setup:
 - [x] System tray with live status
 - [x] VLESS + Reality support
 - [x] Mux multiplexing
-- [x] Auto-reconnect on network change
+- [x] Auto-reconnect on network change *(2026-09-19: fixed an infinite reconnect loop where the VPN's own TUN interface coming up was mistaken for a network change, preventing any traffic from ever passing — see `vpn_service.dart`)*
 - [x] Windows fail-closed protection for xray/tun2socks crashes *(not a full OS-wide kill switch; IPv6 and apps that ignore the Windows system proxy are future work)*
 - [x] Traffic / speed stats
 - [ ] iOS support
